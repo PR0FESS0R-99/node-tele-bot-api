@@ -1,0 +1,28 @@
+{
+  "name": "node-tele-bot-api",
+  "version": "0.0.1",
+  "description": "Telegram Bot API",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PR0FESS0R-99/node-tele-bot-api.git"
+  },
+  "keywords": [
+    "telegram",
+    "telegram bot",
+    "telegram bot api",
+    "bot"
+  ],
+  "engines": {
+    "node": ">=0.12"
+  },
+  "author": "Muhammed <motech8129@gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/PR0FESS0R-99/node-tele-bot-api/issues"
+  },
+  "homepage": "https://github.com/PR0FESS0R-99/node-tele-bot-api#readme"
+}
