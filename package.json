@@ -1,8 +1,7 @@
 {
   "name": "node-tele-bot-api",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Telegram Bot API",
-  "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -24,5 +23,20 @@
   "bugs": {
     "url": "https://github.com/PR0FESS0R-99/node-tele-bot-api/issues"
   },
-  "homepage": "https://github.com/PR0FESS0R-99/node-tele-bot-api#readme"
+  "homepage": "https://github.com/PR0FESS0R-99/node-tele-bot-api#readme",
+  "main": "src/index.js",
+  "exports": {
+    ".": {
+      "default": "./src/telegram.js"
+    },
+    "./types/messageTypes": {
+      "default": "./src/types/messageTypes.js"
+    },
+    "./types/pressModes": {
+      "default": "./src/types/pressModes.js"
+    },
+    "./types/markup": {
+      "default": "./src/types/markup.js"
+    }
+  }
 }

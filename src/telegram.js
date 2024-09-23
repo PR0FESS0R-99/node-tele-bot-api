@@ -7,15 +7,19 @@ class TelegramBotAPI extends EventEmitter {
 
         this.botToken = botToken;
         this.offset = 0;
-        this.options = options;
-        this.options.baseApiUrl = options?.baseApiUrl ?? 'https://api.telegram.org';
-        this.options.timeout = options?.timeout ?? 500;
-        this.options.limit = options?.limit ?? 100;
         this.started = false;
+
+        this.options = {
+            baseApiUrl: options.baseApiUrl || 'https://api.telegram.org',
+            timeout: options.timeout || 500,
+            limit: options.limit || 100,
+            testEnvironment: options.testEnvironment || false
+        };
     };
 
-    #buildURL(_path) {
-        return `${this.options.baseApiUrl}/bot${this.botToken}${this.options.testEnvironment ? '/test' : ''}/${_path}`;
+    #buildURL(path) {
+        const envPath = this.options.testEnvironment ? '/test' : '';
+        return `${this.options.baseApiUrl}/bot${this.botToken}${envPath}/${path}`;
     };
 
     start(callback) {
@@ -38,107 +42,93 @@ class TelegramBotAPI extends EventEmitter {
     };
 
     onMessage(messageType, callback) {
+        if (!Object.values(messageTypes).includes(messageType)) {
+            throw new Error(`Unsupported message type: ${messageType}`);
+        };
+
         this.on(messageType, (update) => {
-            callback(update.message)
+            callback(update.message);
         });
     };
 
-    onCallback(callback) {
-        this.on('callback_query', (update) => {
-            callback(update.callback_query)
+    onText(text, callback) {
+        this.on('handleOnText', (update) => {
+            const reqTxT = update.message?.text || "";
+
+            if (typeof text === 'string' && reqTxT.startsWith(text)) {
+                callback(update.message);
+            } else if (text instanceof RegExp && text.test(reqTxT)) {
+                callback(update.message);
+            };
         });
     };
 
+    // query is optioal callback is requeys
     onCallbackQuery(query, callback) {
-        this.on(`${query}_callback_query`, (update) => {
-            callback(update.callback_query)
+        if (typeof query === 'function') {
+            callback = query;
+            query = "all_______";
+        };
+
+        if (query && /^\/.*\/$/.test(query)) {
+            query = query + "_callback_regex";
+        } else {
+            query = query + "_callback_query";
+        };
+
+        this.on(query, (update) => {
+            callback && callback(update.callback_query);
         });
     };
 
     // === === === === //
 
     sendMessage(options) {
-        return this.#request({
-            path: "sendMessage",
-            options
-        });
+        return this.#request("sendMessage", options);
     };
 
     sendPhoto(options) {
-        return this.#request({
-            path: 'sendPhoto',
-            options
-        });
+        return this.#request('sendPhoto', options);
     };
 
     sendDocument(options) {
-        return this.#request({
-            path: 'sendDocument',
-            options
-        });
+        return this.#request('sendDocument', options);
     };
 
     sendAudio(options) {
-        return this.#request({
-            path: 'sendAudio',
-            options
-        });
+        return this.#request('sendAudio', options);
     };
 
     sendSticker(options) {
-        return this.#request({
-            path: 'sendSticker',
-            options
-        });
+        return this.#request('sendSticker', options);
     };
 
     sendVideo(options) {
-        return this.#request({
-            path: 'sendVideo',
-            options
-        });
+        return this.#request('sendVideo', options);
     };
 
     sendVoice(options) {
-        return this.#request({
-            path: 'sendVoice',
-            options
-        });
+        return this.#request('sendVoice', options);
     };
 
     editMessageText(options) {
-        return this.#request({
-            path: 'editMessageText',
-            options
-        });
+        return this.#request('editMessageText', options);
     };
 
     editMessageCaption(options) {
-        return this.#request({
-            path: 'editMessageCaption',
-            options
-        });
+        return this.#request('editMessageCaption', options);
     };
 
     deleteMessage(options) {
-        return this.#request({
-            path: 'deleteMessage',
-            options
-        });
+        return this.#request('deleteMessage', options);
     };
 
     deleteMessages(options) {
-        return this.#request({
-            path: 'deleteMessages',
-            options
-        });
+        return this.#request('deleteMessages', options);
     };
 
     getFile({ file_id }) {
-        return this.#request({
-            path: "getFile",
-            options: { file_id }
-        });
+        return this.#request("getFile", { file_id });
     };
 
     getFileLink({ file_id }) {
@@ -146,53 +136,42 @@ class TelegramBotAPI extends EventEmitter {
             return `${this.options.baseApiUrl}/file/bot${this.botToken}/${response.file_path}`
         }.bind(this)).catch(error => {
             return { error: error.message }
-        })
+        });
     };
 
     // === === === === //
 
-    #request({ path, options }) {
+    #preparePayload(options) {
+        if (!options) {
+            return { method: 'GET' };
+        }
+
+        const formData = new FormData();
+        Object.entries(options).forEach(([key, value]) => {
+            if (typeof value === 'object' && value?.source) {
+                if (Buffer.isBuffer(value.source)) {
+                    formData.append(key, value.source, { knownLength: value.source.length });
+                } else if (fs.existsSync(value.source)) {
+                    formData.append(key, fs.createReadStream(value.source), { knownLength: fs.statSync(value.source).size });
+                }
+            } else {
+                formData.append(key, value);
+            };
+        });
+
+        return { method: 'POST', body: formData };
+    };
+
+    #request(path, options) {
         if (!this.botToken) {
             throw new Error('Telegram Bot Token is required');
         };
 
-        let payload;
-        if (options) {
-            options = options || {};
+        const payload = this.#preparePayload(options);
+        const url = this.#buildURL(path);
 
-            let formData = new FormData();
-            Object.entries(options).forEach(function ([key, value]) {
-                if (typeof value === 'object') {
-                    const data = value.source;
-                    if (data) {
-                        if (Buffer.isBuffer(data)) {
-                            formData.append(key, data, {
-                                knownLength: data.length
-                            });
-                        } else if (fs.existsSync(data)) {
-                            formData.append(key, fs.createReadStream(data), {
-                                knownLength: fs.statSync(data).size
-                            });
-                        } else {
-                            formData.append(key, data)
-                        }
-                    } else {
-                        formData.append(key, value);
-                    };
-                } else {
-                    formData.append(key, value);
-                }
-            });
-            payload = { method: "POST", body: formData };
-        } else {
-            payload = { method: "GET" };
-        };
-
-        return fetch(this.#buildURL(path), payload).then(res => res.json()).then(function (response) {
+        return fetch(url, payload).then(res => res.json()).then(function (response) {
             if (!response.ok) {
-                console.log('-----');
-                console.log(`Error Code : ${response.error_code} : ${response.description}`);
-                console.log('-----');
                 throw new Error(`Error Code : ${response.error_code} : ${response.description}`);
             };
             return response.result;
@@ -200,42 +179,76 @@ class TelegramBotAPI extends EventEmitter {
     };
 
     #getUpdates({ offset, timeout, limit }) {
-        return this.#request({
-            path: `getUpdates?offset=${offset}&limit=${limit}&timeout=${timeout}`
-        });
+        const path = `getUpdates?offset=${offset}&limit=${limit}&timeout=${timeout}`
+        return this.#request(path);
     };
 
     #handleUpdate(update) {
         let offset = update.update_id + 1;
 
-        if (update?.message?.entities && update.message.entities.length > 0) {
+        // OnText Message Handler
+        if (update?.message) {
+            this.emit("handleOnText", update);
+        }
 
-            const entities = update.message.entities[update.message.entities.length - 1];
+        // onMessage Message Handler
+        if (update?.message) {
+            Object.entries(messageTypes).forEach(([key, value]) => {
+                if (update.message[value] && this.eventNames().includes(value)) {
+                    this.emit(value, update);
+                }
+            });
+        }
 
-            // Check if the entity type is 'bot_command'
-            if (entities.type === 'bot_command') {
-                const command = update.message.text.split(' ')[0].replace('/', '');
+        // onCommand Message Handler
+        if (update?.message?.entities) {
+            const commandEntity = update.message.entities.find(entity => entity.type === 'bot_command');
+            if (commandEntity) {
+                const command = update.message.text
+                    .substring(commandEntity.offset, commandEntity.offset + commandEntity.length)
+                    .replace('/', '')
+                    .toLowerCase();
                 this.emit(command, update);
             }
-        } else if (update?.callback_query) {
-            const list = this.eventNames();
-            if (list.find(event => event === update.callback_query.data + '_callback_query')) {
-                this.emit(`${update.callback_query.data}_callback_query`, update);
-            } else {
-                this.emit('callback_query', update);
-            };
-        } else {
-            Object.values(messageTypes).forEach(type => {
-                if (update.message?.[type]) {
-                    const list = this.eventNames();
-                    if (list.find(event => event === type)) {
-                        this.emit(type, update);
-                    };
-                };
-            });
-        };
+        }
+
+        // onCallbackQuery Handler
+        if (update?.callback_query) {
+            const callbackData = update.callback_query.data;
+
+            // Filter events for query and regex callbacks
+            const filteredQueryArray = this.#filterCallbackEvents('_callback_query');
+            const filteredRegexArray = this.#filterCallbackEvents('_callback_regex', true);
+
+            // Handle exact match callbacks
+            if (filteredQueryArray.includes(callbackData)) {
+                this.emit(callbackData + '_callback_query', update);
+            }
+            // Handle regex-based callbacks
+            else if (this.#matchRegexCallback(filteredRegexArray, callbackData)) {
+                const matchingEvent = this.#matchRegexCallback(filteredRegexArray, callbackData);
+                this.emit(matchingEvent + '_callback_regex', update);
+            }
+            // Emit default callback for unmatched cases
+            else {
+                this.emit('all________callback_query', update);
+            }
+        }
 
         this.offset = offset;
+    }
+
+    #filterCallbackEvents(suffix, isRegex = false) {
+        return this.eventNames()
+            .filter(item => item.endsWith(suffix))
+            .map(item => (isRegex ? item.replace(/_callback_regex$/, '') : item.replace(/_callback_query$/, '')));
+    };
+
+    #matchRegexCallback(regexArray, data) {
+        return regexArray.find(pattern => {
+            const regex = new RegExp(pattern.slice(1, -1));
+            return regex.test(data);
+        });
     };
 
     #handleLoop() {

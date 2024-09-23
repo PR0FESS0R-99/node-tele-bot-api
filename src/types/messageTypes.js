@@ -11,4 +11,4 @@ const messageTypes = {
     VOICE: "voice"
 };
 
-module.exports = messageTypes;
+module.exports = Object.freeze(messageTypes);
