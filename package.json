@@ -1,6 +1,6 @@
 {
   "name": "node-tele-bot-api",
-  "version": "0.0.2",
+  "version": "1.0.0",
   "description": "Telegram Bot API",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
