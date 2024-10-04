@@ -1,5 +1,4 @@
 // Message Types
-
 const messageTypes = {
     TEXT: "text",
     PHOTO: "photo",

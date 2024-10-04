@@ -21,25 +21,22 @@ npm i node-tele-bot-api
 Here’s a quick example of how to get started:
 
 ```js
-const NodeTeleBotAPI = require("node-tele-bot-api");
+const { NodeTeleBotAPI } = require("node-tele-bot-api");
 
 // replace the value below with the Telegram token you receive from @BotFather
 const BOT_TOKEN = "YOUR_BOT_TOKEN";
 
 const bot = new NodeTeleBotAPI(BOT_TOKEN);
 
-// Listen for /start command
-bot.onCommand("start", (message) => {
-  const chat_id = message.chat.id;
-
-  bot.sendMessage({
-    chat_id,
-    text: "Welcome to the bot!",
-  });
+bot.onCommand("start", function (message) {
+    bot.sendMessage({
+        chat_id: message.chat.id,
+        text: `Hello ${userMention(message)}! <b>I'm</b> a simple bot that responds to /start command with a greeting message.`
+    });
 });
 
 bot.start(() => {
-  console.log("Bot is running...");
+    console.log("Bot Started");
 });
 ```
 

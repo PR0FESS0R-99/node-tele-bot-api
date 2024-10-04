@@ -1,6 +1,6 @@
 {
   "name": "node-tele-bot-api",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Telegram Bot API",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -29,14 +29,11 @@
     ".": {
       "default": "./src/telegram.js"
     },
-    "./types/messageTypes": {
-      "default": "./src/types/messageTypes.js"
+    "./types": {
+      "default": "./src/types/index.js"
     },
-    "./types/pressModes": {
-      "default": "./src/types/pressModes.js"
-    },
-    "./types/markup": {
-      "default": "./src/types/markup.js"
+    "./methods": {
+      "default": "./src/methods/index.js"
     }
   }
 }
