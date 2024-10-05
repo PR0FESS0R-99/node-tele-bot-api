@@ -7,7 +7,8 @@ const messageTypes = {
     STICKERS: "sticker",
     VIDEO: "video",
     VIDEO_NOTES: "video_note",
-    VOICE: "voice"
+    VOICE: "voice",
+    FORWARDED: "forward_origin"
 };
 
 module.exports = Object.freeze(messageTypes);
