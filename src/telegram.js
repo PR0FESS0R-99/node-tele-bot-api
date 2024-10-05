@@ -60,6 +60,11 @@ class NodeTeleBotAPI {
 
     // ==== ==== ==== ==== ==== ==== ==== //
 
+    // getMe
+    getMe() {
+        return this.#request("getMe");
+    };
+
     // sendMessage
     sendMessage({ text, chat_id, reply_markup = "", parse_mode = ParseMode.HTML, ...args }) {
         const options = {
