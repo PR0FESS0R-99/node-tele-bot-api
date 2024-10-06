@@ -1,6 +1,9 @@
-const EventEmitter = require('events').EventEmitter;
 const MessageTypes = require("./types/messageTypes");
 const ParseMode = require("./types/parseMode");
+const generateCallback = require("./webhook")
+const crypto = require('crypto')
+const { URL } = require('url');
+const EventEmitter = require("events").EventEmitter
 
 class NodeTeleBotAPI {
     constructor(botToken, options = {}) {
@@ -11,7 +14,14 @@ class NodeTeleBotAPI {
             baseApiUrl: options.baseApiUrl || 'https://api.telegram.org',
             timeout: options.timeout || 500,
             limit: options.limit || 100,
-            testEnvironment: options.testEnvironment || false
+            testEnvironment: options.testEnvironment || false,
+            webhook: {
+                domain: options.webhook?.domain || "",
+                path: options.webhook?.path || "/",
+                tlsOptions: options.webhook?.tlsOptions,
+                cb: options.webhook?.cb || function () { },
+                port: options.webhook?.port || 8443
+            }
         };
 
         this.callbackEvent = new EventEmitter();
@@ -21,14 +31,83 @@ class NodeTeleBotAPI {
 
     start(callback) {
         this.started = true;
-        this.#handleLoop();
-        callback && callback();
+
+        this.getMe().then(botInto => {
+            if (!this.options.webhook.domain) {
+                this.deleteWebhook({ drop_pending_updates: true }).then(() => {
+                    this.#handleLoop();
+                    callback && callback(botInto);
+                }).then(() => console.log('Bot started with long-polling'));
+            };
+
+            if (typeof this.options.webhook.domain !== 'string' && typeof this.options.webhook.path !== 'string') {
+                throw new Error('Webhook domain or webhook path is required')
+            };
+
+            let domain = this.options.webhook.domain || ''
+            if (domain.startsWith('https://') || domain.startsWith('http://')) {
+                domain = new URL(domain).host
+            };
+
+            const hookPath = this.options.webhook.path || `/nodeTelebotApi/${crypto.randomBytes(32).toString('hex')}`
+            const { port, host, tlsOptions, cb } = this.options.webhook
+            this.startWebhook(hookPath, tlsOptions, port, host, cb)
+            if (!domain) {
+                console.log('Bot started with webhook')
+                return
+            }
+
+            return this.setWebhook(`https://${domain}${hookPath}`)
+                .then(() => console.log(`Bot started with webhook @ https://${domain}`))
+        }).catch((err) => {
+            console.error('Launch failed')
+            console.error(err.stack || err.toString())
+        })
     };
 
     stop(callback) {
         this.started = false;
         callback && callback();
     };
+
+    // Webhook 
+    webhookCallback(path = '/') {
+        return generateCallback(path, (update) => this.#handleUpdate(update))
+    };
+
+    startWebhook(hookPath, tlsOptions, port, host, cb) {
+        const webhookCb = this.webhookCallback(hookPath)
+        const callback = cb && typeof cb === 'function'
+            ? (req, res) => webhookCb(req, res, () => cb(req, res))
+            : webhookCb
+        this.webhookServer = tlsOptions
+            ? require('https').createServer(tlsOptions, callback)
+            : require('http').createServer(callback)
+        this.webhookServer.listen(port, host, () => {
+            console.log('Webhook listening on port: %s', port)
+        });
+        return this
+    };
+
+    setWebhook({ url, ...args }) {
+        const options = {
+            url,
+            ...args
+        };
+        return this.#request("setWebhook", options);
+    };
+
+
+    deleteWebhook({ drop_pending_updates }) {
+        const options = {
+            drop_pending_updates: drop_pending_updates
+        };
+        return this.#request("deleteWebhook");
+    };
+
+
+
+
 
     // ==== ==== ==== ==== ==== ==== ==== //
 
