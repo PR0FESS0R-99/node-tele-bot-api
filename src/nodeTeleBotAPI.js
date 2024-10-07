@@ -1,143 +1,196 @@
+const EventEmitter = require("events").EventEmitter;
 const MessageTypes = require("./types/messageTypes");
 const ParseMode = require("./types/parseMode");
-const generateCallback = require("./webhook")
 const crypto = require('crypto')
-const { URL } = require('url');
-const EventEmitter = require("events").EventEmitter
+const { URL } = require('url')
+const webhookCallback = require("./webhook");
 
 class NodeTeleBotAPI {
-    constructor(botToken, options = {}) {
-        this.botToken = botToken;
-        this.started = false;
+    constructor(token) {
+        if (typeof token !== 'string' || !token.trim()) {
+            throw new Error("Bot token must be a non-empty string.");
+        };
 
-        this.options = {
-            baseApiUrl: options.baseApiUrl || 'https://api.telegram.org',
-            timeout: options.timeout || 500,
-            limit: options.limit || 100,
-            testEnvironment: options.testEnvironment || false,
-            webhook: {
-                domain: options.webhook?.domain || "",
-                path: options.webhook?.path || "/",
-                tlsOptions: options.webhook?.tlsOptions,
-                cb: options.webhook?.cb || function () { },
-                port: options.webhook?.port || 8443
-            }
+        this.started = false;
+        this.botConfig = {
+            token: token,
+            baseApiUrl: 'https://api.telegram.org',
+            testEnvironment: false,
+            allowedUpdates: []
         };
 
         this.callbackEvent = new EventEmitter();
         this.messageTypeEvent = new EventEmitter();
         this.commandEvent = new EventEmitter();
+
+        this.polling = {
+            limit: 100,
+            offset: 100,
+            timeout: 100,
+        };
+
+        this.webhook = {
+            started: false
+        };
     };
 
+    // ===================================================================== //
+
+    setBotConfig({ baseApiUrl, allowedUpdates, testEnvironment }) {
+        if (baseApiUrl && typeof baseApiUrl !== 'string') {
+            throw new Error("baseApiUrl must be a string.");
+        }
+
+        if (allowedUpdates && !Array.isArray(allowedUpdates)) {
+            throw new Error("allowedUpdates must be an array.");
+        }
+
+        if (testEnvironment !== undefined && typeof testEnvironment !== 'boolean') {
+            throw new Error("testEnvironment must be a boolean.");
+        }
+
+        // Update bot configuration with provided values or retain existing ones
+        this.botConfig.baseApiUrl = baseApiUrl || this.botConfig.baseApiUrl;
+        this.botConfig.allowedUpdates = allowedUpdates || this.botConfig.allowedUpdates;
+        this.botConfig.testEnvironment = testEnvironment !== undefined ? testEnvironment : this.botConfig.testEnvironment;
+
+        console.log("Bot configuration successfully updated:", this.botConfig);
+    }
+
+    setPollingConfig({ timeout, limit }) {
+        if (typeof timeout !== 'number' || typeof limit !== 'number') {
+            throw new Error("Both timeout and limit must be numbers.");
+        }
+
+        // Set polling configuration with defaults if values are not provided
+        this.polling.timeout = timeout ?? this.polling.timeout;
+        this.polling.limit = limit ?? this.polling.limit;
+
+        console.log("Successfully set polling configuration:", {
+            timeout: this.polling.timeout,
+            limit: this.polling.limit,
+        });
+    };
+
+    setWebhookConfig({ domain, hostname, port, path, cb }) {
+
+        this.webhook.started = true;
+        this.webhook.domain = domain ?? "";
+        this.webhook.hostname = hostname ?? "";
+        this.webhook.port = port ?? 443;
+        this.webhook.path = path;
+        this.webhook.cb = cb ?? ""
+
+        console.log("Successfully set webook configuration:", this.webhook);
+    };
+
+
+    // ===================================================================== //
+
     start(callback) {
+        if (this.started) {
+            throw new Error("Bot is already running.");
+        };
+
         this.started = true;
 
-        this.getMe().then(botInto => {
-            if (!this.options.webhook.domain) {
-                this.deleteWebhook({ drop_pending_updates: true }).then(() => {
-                    this.#handleLoop();
-                    callback && callback(botInto);
-                }).then(() => console.log('Bot started with long-polling'));
-            };
+        return this.getMe()
+            .then((botInfo) => {
+                // Handle Polling if webhook is not started
+                if (!this.webhook.started) {
+                    return this.deleteWebhook({ drop_pending_updates: false })
+                        .then(() => {
+                            if (callback) callback(botInfo);  // Safely invoke the callback
+                            this.#handleLoop();  // Start polling after webhook deletion
+                        })
+                        .catch((err) => {
+                            console.error("Error deleting webhook:", err);
+                        });
+                }
 
-            if (typeof this.options.webhook.domain !== 'string' && typeof this.options.webhook.path !== 'string') {
-                throw new Error('Webhook domain or webhook path is required')
-            };
-
-            let domain = this.options.webhook.domain || ''
-            if (domain.startsWith('https://') || domain.startsWith('http://')) {
-                domain = new URL(domain).host
-            };
-
-            const hookPath = this.options.webhook.path || `/nodeTelebotApi/${crypto.randomBytes(32).toString('hex')}`
-            const { port, host, tlsOptions, cb } = this.options.webhook
-            this.startWebhook(hookPath, tlsOptions, port, host, cb)
-            if (!domain) {
-                console.log('Bot started with webhook')
-                return
-            }
-
-            return this.setWebhook(`https://${domain}${hookPath}`)
-                .then(() => console.log(`Bot started with webhook @ https://${domain}`))
-        }).catch((err) => {
-            console.error('Launch failed')
-            console.error(err.stack || err.toString())
-        })
+                // Handle webhook
+                this.#startWebhook();
+            })
+            .catch((error) => {
+                console.error("Error starting the bot:", error);
+                this.botStarted = false;  // Reset the botStarted flag if startup fails
+            });
     };
 
     stop(callback) {
-        this.started = false;
-        callback && callback();
+        if (!this.started) {
+            throw new Error("Bot is not running.");
+        }
+
+        this.botStarted = false;
+
+        return this.getMe()
+            .then((botInfo) => callback && callback(botInfo))
+            .catch((error) => {
+                console.error("Error stopping the bot:", error);
+            });
     };
 
-    // Webhook 
-    webhookCallback(path = '/') {
-        return generateCallback(path, (update) => this.#handleUpdate(update))
-    };
+    // ===================================================================== //
 
-    startWebhook(hookPath, tlsOptions, port, host, cb) {
-        const webhookCb = this.webhookCallback(hookPath)
-        const callback = cb && typeof cb === 'function'
-            ? (req, res) => webhookCb(req, res, () => cb(req, res))
-            : webhookCb
-        this.webhookServer = tlsOptions
-            ? require('https').createServer(tlsOptions, callback)
-            : require('http').createServer(callback)
-        this.webhookServer.listen(port, host, () => {
-            console.log('Webhook listening on port: %s', port)
-        });
-        return this
-    };
-
-    setWebhook({ url, ...args }) {
-        const options = {
-            url,
-            ...args
-        };
-        return this.#request("setWebhook", options);
-    };
-
-
-    deleteWebhook({ drop_pending_updates }) {
-        const options = {
-            drop_pending_updates: drop_pending_updates
-        };
-        return this.#request("deleteWebhook");
-    };
-
-
-
-
-
-    // ==== ==== ==== ==== ==== ==== ==== //
-
-    // Basic Events
-
-    // ==== ==== ==== ==== ==== ==== ==== //
-
-    // Command Event
     onCommand(command, callback) {
         this.commandEvent.on(command.toLowerCase(), callback);
     };
 
-    // Message Type Event
     onMessage(messageType, callback) {
         this.messageTypeEvent.on(messageType, callback);
     };
 
     onCallbackQuery(query, callback) {
-        if (!callback) {
-            callback = query;
-            query = 'callback_query';
+        if (typeof callback !== 'function') {
+            callback = query;  // If no callback, treat query as callback
+            query = 'callback_query';  // Default query
         }
         this.callbackEvent.on(query, callback);
     };
 
-    // ==== ==== ==== ==== ==== ==== ==== //
+    // ===================================================================== //
 
-    // Available Methods
+    // setWebhook
+    setWebhook({ url, certificate, ip_address, max_connections, allowed_updates }) {
+        const options = {
+            url,
+            certificate,
+            ip_address,
+            max_connections,
+            allowed_updates: JSON.stringify(allowed_updates || [])
+        };
+        return this.#request('setWebhook', options)
+    };
 
-    // ==== ==== ==== ==== ==== ==== ==== //
+    // deleteWebhook
+    deleteWebhook({ drop_pending_updates }) {
+        const options = {
+            drop_pending_updates
+        };
+        return this.#request('deleteWebhook', options)
+    };
+
+    // getWebhookInfo
+    getWebhookInfo() {
+        return this.#request('getWebhookInfo')
+    };
+
+    // WebhookInfo
+    WebhookInfo({ url, has_custom_certificate, pending_update_count, ip_address, last_error_date, last_error_message, last_synchronization_error_date, max_connections, allowed_updates }) {
+        const options = {
+            url,
+            has_custom_certificate,
+            pending_update_count,
+            ip_address,
+            last_error_date,
+            last_error_message,
+            last_synchronization_error_date,
+            max_connections,
+            allowed_updates
+        };
+        return this.#request('WebhookInfo', options)
+    };
 
     // getMe
     getMe() {
@@ -823,15 +876,11 @@ class NodeTeleBotAPI {
         return this.#request('deleteMessages', options);
     };
 
-    // ==== ==== ==== ==== ==== ==== ==== //
-
-    // Telegram API Managment
-
-    // ==== ==== ==== ==== ==== ==== ==== //
+    // ===================================================================== //
 
     #buildURL(path) {
-        const envPath = this.options.testEnvironment ? '/test' : '';
-        return `${this.options.baseApiUrl}/bot${this.botToken}${envPath}/${path}`;
+        const envPath = this.botConfig.testEnvironment ? '/test' : '';
+        return `${this.botConfig.baseApiUrl}/bot${this.botConfig.token}${envPath}/${path}`;
     };
 
     #preparePayload(options) {
@@ -855,16 +904,13 @@ class NodeTeleBotAPI {
         return { method: 'POST', body: formData };
     };
 
+
     #getUpdates({ offset, timeout, limit }) {
         const path = `getUpdates?offset=${offset}&limit=${limit}&timeout=${timeout}`
         return this.#request(path);
     };
 
     #request(path, options) {
-        if (!this.botToken) {
-            throw new Error('Telegram Bot Token is required');
-        };
-
         const payload = this.#preparePayload(options);
         const url = this.#buildURL(path);
 
@@ -932,8 +978,10 @@ class NodeTeleBotAPI {
             });
         };
 
-        this.offset = offset;
+        this.polling.offset = offset;
     };
+
+    // ===================================================================== //
 
     #handleLoop() {
         if (!this.started) {
@@ -944,15 +992,41 @@ class NodeTeleBotAPI {
         const handleUpdate = this.#handleUpdate.bind(this);
 
         this.#getUpdates({
-            offset: this.offset,
-            limit: this.options.limit,
-            timeout: this.options.timeout
+            offset: this.polling.offset,
+            limit: this.polling.limit,
+            timeout: this.polling.timeout
         }).then(function (updates) {
             updates.forEach(update => handleUpdate(update));
             updateLoop();
         }).catch(function (error) {
             console.log(error);
             updateLoop();
+        });
+    };
+
+    // ===================================================================== //
+
+    #startWebhook() {
+        let { port, hostname, cb: customCallback, ...webhook } = this.webhook
+
+        const domain = new URL(webhook.domain).host;
+        const hookpath = webhook.path || `/node-tele-bot-api/${crypto.randomBytes(32).toString('hex')}`;
+
+        this.#webhookServer(hookpath, port, hostname, customCallback);
+
+        this.setWebhook({
+            url: `https://${domain}${hookpath}`
+        }).then(() => console.log(`Bot started with webhook @ https://${domain}`))
+    };
+
+    #webhookServer(hookpath, port, hostname, customCallback) {
+        const webhookCb = webhookCallback(hookpath, (update) => this.#handleUpdate(update));
+        const callback = (customCallback && typeof customCallback === 'function') ? customCallback : webhookCb;
+
+        const server = require('http').createServer(callback);
+
+        server.listen(port, hostname, () => {
+            console.log('Webhook listening on port: %s', port)
         });
     };
 };
