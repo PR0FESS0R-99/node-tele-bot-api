@@ -152,13 +152,14 @@ class NodeTeleBotAPI {
     // ===================================================================== //
 
     // setWebhook
-    setWebhook({ url, certificate, ip_address, max_connections, allowed_updates }) {
+    setWebhook({ url, ...args }) {
         const options = {
             url,
-            certificate,
-            ip_address,
-            max_connections,
-            allowed_updates: JSON.stringify(allowed_updates || [])
+            ...args
+            // certificate,
+            // ip_address,
+            // max_connections,
+            // allowed_updates: JSON.stringify(allowed_updates || [])
         };
         return this.#request('setWebhook', options)
     };
@@ -1018,6 +1019,7 @@ class NodeTeleBotAPI {
             url: `https://${domain}${hookpath}`
         }).then(() => console.log(`Bot started with webhook @ https://${domain}`))
     };
+
 
     #webhookServer(hookpath, port, hostname, customCallback) {
         const webhookCb = webhookCallback(hookpath, (update) => this.#handleUpdate(update));

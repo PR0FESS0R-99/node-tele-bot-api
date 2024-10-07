@@ -1,4 +1,4 @@
-module.exports = function (hookPath, updateHandler, errorHandler) {
+module.exports = function (hookPath, updateHandler) {
     return (req, res, next) => {
         if (req.method !== 'POST' || req.url !== hookPath) {
             if (typeof next === 'function') {
@@ -11,6 +11,8 @@ module.exports = function (hookPath, updateHandler, errorHandler) {
         req.on('data', (chunk) => {
             body += chunk.toString()
         })
+        console.log(body);
+
         req.on('end', () => {
             let update = {}
             try {
@@ -18,18 +20,11 @@ module.exports = function (hookPath, updateHandler, errorHandler) {
             } catch (error) {
                 res.writeHead(415)
                 res.end()
-                return errorHandler(error)
+                console.log(error);
+                return
             }
             updateHandler(update, res)
-                .then(() => {
-                    if (!res.finished) {
-                        res.end()
-                    }
-                })
-                .catch((err) => {
-                    res.writeHead(500)
-                    res.end()
-                })
+                res.end()
         })
     }
 }

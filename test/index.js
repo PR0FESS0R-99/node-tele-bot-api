@@ -37,9 +37,10 @@ bot.start(() => {
 
 // webhook method
 bot.setWebhookConfig({
-    domain: "https://2dff-2409-40f3-4-ad6b-90b3-bee6-5162-5800.ngrok-free.app",
-    port: 443
+    domain: "https://8650-2409-40f3-4-ad6b-90b3-bee6-5162-5800.ngrok-free.app",
+    port: 4040
 })
+
 
 
 
