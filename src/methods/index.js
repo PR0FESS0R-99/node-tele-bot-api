@@ -1,1 +1,0 @@
-module.exports.userMention = require("./userMention");

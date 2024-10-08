@@ -1,10 +1,7 @@
 {
   "name": "node-tele-bot-api",
-  "version": "0.0.9",
-  "description": "Telegram Bot API",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
+  "version": "0.0.10",
+  "description": "A lightweight Node.js library for building Telegram bots. Easily manage messages, commands, and events with a simple and intuitive API.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/PR0FESS0R-99/node-tele-bot-api.git"
@@ -13,7 +10,8 @@
     "telegram",
     "telegram bot",
     "telegram bot api",
-    "bot"
+    "bot",
+    "node-tele-bot-api"
   ],
   "engines": {
     "node": ">=0.12"
@@ -24,16 +22,13 @@
     "url": "https://github.com/PR0FESS0R-99/node-tele-bot-api/issues"
   },
   "homepage": "https://github.com/PR0FESS0R-99/node-tele-bot-api#readme",
-  "main": "src/index.js",
+  "main": "src/nodeTeleBotAPI.js",
   "exports": {
     ".": {
       "default": "./src/nodeTeleBotAPI.js"
     },
     "./types": {
       "default": "./src/types/index.js"
-    },
-    "./methods": {
-      "default": "./src/methods/index.js"
     }
   },
   "dependencies": {

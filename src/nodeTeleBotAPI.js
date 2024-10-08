@@ -1,42 +1,69 @@
-const EventEmitter = require("events").EventEmitter;
-const MessageTypes = require("./types/messageTypes");
-const ParseMode = require("./types/parseMode");
-const crypto = require('crypto')
-const { URL } = require('url')
-const webhookCallback = require("./webhook");
+const APIClient = require("./telegram/core/apiClient");
+const TelegramMethod = require("./telegram/telegram");
+const TelegramPolling = require("./telegram/core/polling");
+const TelegramWebhook = require("./telegram/core/webhook");
+const EventEmitter = require('events');
+const MessageTypes = require("./utils/messageTypes");
 
 class NodeTeleBotAPI {
-    constructor(token) {
-        if (typeof token !== 'string' || !token.trim()) {
+    constructor(botToken) {
+        if (!this?.botConfig?.token && (typeof botToken !== 'string' || !botToken.trim())) {
             throw new Error("Bot token must be a non-empty string.");
         };
 
-        this.started = false;
+        this.botStarted = false;
+
         this.botConfig = {
-            token: token,
-            baseApiUrl: 'https://api.telegram.org',
-            testEnvironment: false,
-            allowedUpdates: []
+            token: botToken || this?.botConfig?.token,
+            baseApiUrl: "https://api.telegram.org",
+            allowedUpdates: [],
+            isTestMode: false
         };
 
-        this.callbackEvent = new EventEmitter();
-        this.messageTypeEvent = new EventEmitter();
-        this.commandEvent = new EventEmitter();
-
+        // Polling Params 
         this.polling = {
+            timeout: 1,
             limit: 100,
-            offset: 100,
-            timeout: 100,
+            retryDelay: 2000 // Default retry delay in milliseconds
         };
 
+        // Initialize APIClient with botConfig
+        this.callApi = new APIClient(this.botConfig);
+
+        // Initialize TelegramMethod with APIClient instance
+        this.telegram = new TelegramMethod(this.callApi);
+
+        // Event Emitters for command, message, and callback queries
+        this.commandEvent = new EventEmitter();
+        this.messageTypeEvent = new EventEmitter();
+        this.callbackEvent = new EventEmitter();
+
+        // Webhook Params
         this.webhook = {
-            started: false
+            start: false,
+            domain: null,
+            hostname: null,
+            path: null,
+            port: null,
+            callback: null
         };
     };
 
-    // ===================================================================== //
+    // ============================================== //
 
-    setBotConfig({ baseApiUrl, allowedUpdates, testEnvironment }) {
+    /**
+     * Updates the bot configuration.
+     * @param {Object} config - The configuration object.
+     * @param {string} config.token - The bot token.
+     * @param {string} [config.baseApiUrl] - The base API URL for the bot.
+     * @param {Array<string>} [config.allowedUpdates] - Array of allowed updates.
+     * @param {boolean} [config.isTestMode] - Flag indicating if the bot is in test mode.
+     */
+    setBotConfig({ token, baseApiUrl, allowedUpdates, isTestMode }) {
+        if (!this?.botConfig?.token && (typeof token !== 'string' || !token.trim())) {
+            throw new Error("token must be a non-empty string.");
+        }
+
         if (baseApiUrl && typeof baseApiUrl !== 'string') {
             throw new Error("baseApiUrl must be a string.");
         }
@@ -45,887 +72,195 @@ class NodeTeleBotAPI {
             throw new Error("allowedUpdates must be an array.");
         }
 
-        if (testEnvironment !== undefined && typeof testEnvironment !== 'boolean') {
-            throw new Error("testEnvironment must be a boolean.");
+        if (isTestMode !== undefined && typeof isTestMode !== 'boolean') {
+            throw new Error("isTestMode must be a boolean.");
         }
 
         // Update bot configuration with provided values or retain existing ones
+        this.botConfig.token = token || this.botConfig.token;
         this.botConfig.baseApiUrl = baseApiUrl || this.botConfig.baseApiUrl;
         this.botConfig.allowedUpdates = allowedUpdates || this.botConfig.allowedUpdates;
-        this.botConfig.testEnvironment = testEnvironment !== undefined ? testEnvironment : this.botConfig.testEnvironment;
+        this.botConfig.isTestMode = isTestMode !== undefined ? isTestMode : this.botConfig.isTestMode;
 
         console.log("Bot configuration successfully updated:", this.botConfig);
-    }
+    };
 
-    setPollingConfig({ timeout, limit }) {
+    /**
+     * Sets the polling configuration.
+     * @param {Object} config - The polling configuration object.
+     * @param {number} config.timeout - The timeout for polling.
+     * @param {number} config.limit - The limit of updates to retrieve.
+     * @param {number} [config.retryDelay] - The delay to retry polling in case of errors.
+     */
+    setPollingConfig({ timeout, limit, retryDelay }) {
         if (typeof timeout !== 'number' || typeof limit !== 'number') {
             throw new Error("Both timeout and limit must be numbers.");
         }
 
-        // Set polling configuration with defaults if values are not provided
-        this.polling.timeout = timeout ?? this.polling.timeout;
-        this.polling.limit = limit ?? this.polling.limit;
+        if (retryDelay !== undefined && typeof retryDelay !== 'number') {
+            throw new Error("retryDelay must be a number.");
+        }
+
+        this.polling.timeout = timeout;
+        this.polling.limit = limit;
+        this.polling.retryDelay = retryDelay || this.polling.retryDelay; // Default to existing retryDelay if not provided
 
         console.log("Successfully set polling configuration:", {
             timeout: this.polling.timeout,
             limit: this.polling.limit,
+            retryDelay: this.polling.retryDelay,
         });
     };
 
-    setWebhookConfig({ domain, hostname, port, path, cb }) {
-
-        this.webhook.started = true;
-        this.webhook.domain = domain ?? "";
-        this.webhook.hostname = hostname ?? "";
-        this.webhook.port = port ?? 443;
-        this.webhook.path = path;
-        this.webhook.cb = cb ?? ""
-
-        console.log("Successfully set webook configuration:", this.webhook);
-    };
-
-
-    // ===================================================================== //
-
-    start(callback) {
-        if (this.started) {
-            throw new Error("Bot is already running.");
+    /**
+     * Sets the webhook configuration.
+     * @param {object} config - The webhook configuration object.
+     * @param {string} config.domain - The domain for the webhook.
+     * @param {string} config.hostname - The hostname for the webhook.
+     * @param {string} config.path - The path for the webhook.
+     * @param {number} config.port - The port for the webhook.
+     * @param {function} config.callback - The callback for webhook requests.
+     */
+    setWebhookConfig({ domain, hostname, path, port, callback }) {
+        if (typeof domain !== 'string') {
+            throw new Error("Domain must be strings.");
         };
 
-        this.started = true;
+        if (path && typeof path !== 'string') {
+            throw new Error("Path must be a string.");
+        };
 
-        return this.getMe()
-            .then((botInfo) => {
-                // Handle Polling if webhook is not started
-                if (!this.webhook.started) {
-                    return this.deleteWebhook({ drop_pending_updates: false })
-                        .then(() => {
-                            if (callback) callback(botInfo);  // Safely invoke the callback
-                            this.#handleLoop();  // Start polling after webhook deletion
-                        })
-                        .catch((err) => {
-                            console.error("Error deleting webhook:", err);
-                        });
-                }
+        if (port && typeof port !== 'number') {
+            throw new Error("Port must be a number.");
+        };
 
-                // Handle webhook
-                this.#startWebhook();
-            })
-            .catch((error) => {
-                console.error("Error starting the bot:", error);
-                this.botStarted = false;  // Reset the botStarted flag if startup fails
-            });
-    };
+        if (callback && typeof callback !== 'function') {
+            throw new Error("Callback must be a function.");
+        };
 
-    stop(callback) {
-        if (!this.started) {
-            throw new Error("Bot is not running.");
+        if (typeof domain !== 'string') {
+            throw new Error("Domain must be strings.");
         }
 
-        this.botStarted = false;
+        this.webhook.start = true;
+        this.webhook.domain = domain;
+        this.webhook.hostname = hostname;
+        this.webhook.path = path;
+        this.webhook.port = port;
+        this.webhook.callback = callback;
 
-        return this.getMe()
-            .then((botInfo) => callback && callback(botInfo))
-            .catch((error) => {
-                console.error("Error stopping the bot:", error);
+        console.log("Successfully set webhook configuration:", this.webhook);
+    };
+
+    // ============================================== //
+
+    /**
+     * Connects the bot to a webhook.
+     * @param {object} options - The configuration options for the webhook.
+     * @param {string} options.url - The URL for the webhook.
+     * @param {object} [options.arg] - Additional optional arguments to pass to the setWebhook method.
+     * @returns {Promise} - Resolves with the result of setting the webhook or rejects with an error.
+     */
+    connectWebhook({ url, ...arg }) {
+        if (typeof url !== 'string' || !url.trim()) {
+            throw new Error('Webhook URL must be a non-empty string.');
+        }
+
+        return this.telegram.setWebhook({ url, ...arg })
+            .then(response => {
+                console.log(`Webhook successfully connected to ${url}`);
+                return response;
+            })
+            .catch(error => {
+                console.error(`Failed to connect webhook to ${url}:`, error.message);
+                throw new Error('Webhook connection failed. Please check your settings.');
             });
     };
 
-    // ===================================================================== //
+    // ============================================== //
 
+    /**
+     * Starts the bot in polling mode.
+     * @param {function} [callback] - Optional callback to be executed after starting the bot.
+     */
+    startBot(callback) {
+        if (!this.botConfig?.token) {
+            throw new Error("Token must be a non-empty string.");
+        };
+
+        this.botStarted = true;
+
+        this.telegram.getMe()
+            .then((botInfo) => {
+                // Check if webhook is set, otherwise start polling
+                if (!this.webhook.start) {
+                    return this.telegram.deleteWebhook({ drop_pending_updates: false }).then(() => {
+                        // Initialize polling
+                        const options = {
+                            timeout: this.polling.timeout, // Set timeout from config
+                            limit: this.polling.limit, // Set limit from config
+                            retryDelay: this.polling.retryDelay, // Set retry delay from config
+                        }
+                        const polling = new TelegramPolling(this, options);
+                        polling.startPolling();
+                        callback && callback(botInfo);
+                    }).catch(error => {
+                        console.error('Error deleting webhook:', error);
+                        callback && callback({ error });
+                    });
+                };
+
+                const webhook = new TelegramWebhook(this, this.webhook);
+                webhook.startWebhook(() => {
+                    callback && callback(botInfo);
+                });
+            })
+            .catch(error => {
+                console.error('Error getting bot info:', error);
+                callback && callback({ error });
+            });
+    };
+
+    // ============================================== //
+
+    /**
+     * Registers a command handler.
+     * @param {string} command - The command to listen for.
+     * @param {function} callback - The callback to execute when the command is received.
+     */
     onCommand(command, callback) {
         this.commandEvent.on(command.toLowerCase(), callback);
     };
 
+    /**
+     * Registers a message type handler.
+     * @param {string} messageType - The type of message to listen for.
+     * @param {function} callback - The callback to execute when the message type is received.
+     */
     onMessage(messageType, callback) {
         this.messageTypeEvent.on(messageType, callback);
     };
 
+    /**
+     * Registers a callback query handler.
+     * @param {string} [query] - The query to listen for.
+     * @param {function} callback - The callback to execute when the callback query is received.
+     */
     onCallbackQuery(query, callback) {
         if (typeof callback !== 'function') {
-            callback = query;  // If no callback, treat query as callback
+            callback = query;
             query = 'callback_query';  // Default query
         }
         this.callbackEvent.on(query, callback);
     };
 
-    // ===================================================================== //
-
-    // setWebhook
-    setWebhook({ url, ...args }) {
-        const options = {
-            url,
-            ...args
-            // certificate,
-            // ip_address,
-            // max_connections,
-            // allowed_updates: JSON.stringify(allowed_updates || [])
-        };
-        return this.#request('setWebhook', options)
-    };
-
-    // deleteWebhook
-    deleteWebhook({ drop_pending_updates }) {
-        const options = {
-            drop_pending_updates
-        };
-        return this.#request('deleteWebhook', options)
-    };
-
-    // getWebhookInfo
-    getWebhookInfo() {
-        return this.#request('getWebhookInfo')
-    };
-
-    // WebhookInfo
-    WebhookInfo({ url, has_custom_certificate, pending_update_count, ip_address, last_error_date, last_error_message, last_synchronization_error_date, max_connections, allowed_updates }) {
-        const options = {
-            url,
-            has_custom_certificate,
-            pending_update_count,
-            ip_address,
-            last_error_date,
-            last_error_message,
-            last_synchronization_error_date,
-            max_connections,
-            allowed_updates
-        };
-        return this.#request('WebhookInfo', options)
-    };
-
-    // getMe
-    getMe() {
-        return this.#request("getMe");
-    };
-
-    // sendMessage
-    sendMessage({ text, chat_id, reply_markup = "", parse_mode = ParseMode.HTML, ...args }) {
-        const options = {
-            text,
-            chat_id,
-            reply_markup,
-            parse_mode,
-            ...args
-        };
-        return this.#request("sendMessage", options);
-    };
-
-    // forwardMessage
-    forwardMessage({ chat_id, from_chat_id, message_id, disable_notification = false, ...args }) {
-        const options = {
-            chat_id,
-            from_chat_id,
-            message_id,
-            disable_notification,
-            ...args
-        };
-        return this.#request("forwardMessage", options);
-    };
-
-    // forwardMessages
-    forwardMessages({ chat_id, from_chat_id, message_ids, disable_notification = false, ...args }) {
-        const options = {
-            chat_id,
-            from_chat_id,
-            message_ids: JSON.parse(message_ids),
-            disable_notification,
-            ...args
-        };
-        return this.#request("forwardMessages", options);
-    };
-
-    // copyMessage
-    copyMessage({ chat_id, from_chat_id, message_id, caption = "", reply_markup = "", parse_mode = ParseMode.HTML, ...args }) {
-        const options = {
-            chat_id,
-            from_chat_id,
-            message_id,
-            caption,
-            parse_mode,
-            reply_markup,
-            ...args
-        };
-        return this.#request("copyMessage", options);
-    };
-
-    // copyMessage
-    copyMessages({ chat_id, from_chat_id, message_ids, caption = "", reply_markup = "", parse_mode = ParseMode.HTML, ...args }) {
-        const options = {
-            chat_id,
-            from_chat_id,
-            message_ids: JSON.parse(message_ids),
-            caption,
-            parse_mode,
-            reply_markup,
-            ...args
-        };
-        return this.#request("copyMessage", options);
-    }; F
-
-    // sendPhoto
-    sendPhoto({ photo, chat_id, caption = "", reply_markup = "", parse_mode = ParseMode.HTML, ...args }) {
-        const options = {
-            photo,
-            chat_id,
-            caption,
-            parse_mode,
-            reply_markup,
-            ...args
-        };
-        return this.#request("sendPhoto", options);
-    };
-
-    // sendAudio
-    sendAudio({ audio, chat_id, caption = "", duration = 0, performer = "", title = "", reply_markup = "", parse_mode = ParseMode.HTML, ...args }) {
-        const options = {
-            audio,
-            chat_id,
-            caption,
-            parse_mode,
-            duration,
-            performer,
-            title,
-            reply_markup,
-            ...args
-        };
-        return this.#request("sendAudio", options);
-    };
-
-    // sendDocument
-    sendDocument({ document, chat_id, caption = "", reply_markup = "", parse_mode = ParseMode.HTML, ...args }) {
-        const options = {
-            document,
-            chat_id,
-            caption,
-            parse_mode,
-            reply_markup,
-            ...args
-        };
-        return this.#request("sendDocument", options);
-    };
-
-    // sendVideo
-    sendVideo({ video, chat_id, caption = "", duration = 0, width = 0, height = 0, reply_markup = "", parse_mode = ParseMode.HTML, ...args }) {
-        const options = {
-            video,
-            chat_id,
-            caption,
-            parse_mode,
-            duration,
-            width,
-            height,
-            reply_markup,
-            ...args
-        };
-        return this.#request("sendVideo", options);
-    };
-
-    // sendAnimation
-    sendAnimation({ animation, chat_id, caption = "", duration = 0, width = 0, height = 0, reply_markup = "", parse_mode = ParseMode.HTML, ...args }) {
-        const options = {
-            animation,
-            chat_id,
-            caption,
-            parse_mode,
-            duration,
-            width,
-            height,
-            reply_markup,
-            ...args
-        };
-        return this.#request("sendAnimation", options);
-    };
-
-    // sendVoice
-    sendVoice({ voice, chat_id, caption = "", duration = 0, reply_markup = "", parse_mode = ParseMode.HTML, ...args }) {
-        const options = {
-            voice,
-            chat_id,
-            caption,
-            parse_mode,
-            duration,
-            reply_markup,
-            ...args
-        };
-        return this.#request("sendVoice", options);
-    };
-
-    // sendVideoNote
-    sendVideoNote({ video_note, chat_id, duration = 0, length = 0, reply_markup = "", ...args }) {
-        const options = {
-            video_note,
-            chat_id,
-            duration,
-            length,
-            reply_markup,
-            ...args
-        };
-        return this.#request("sendVideoNote", options);
-    };
-
-    // sendMediaGroup
-    sendMediaGroup({ media, chat_id, ...args }) {
-        const options = {
-            media,
-            chat_id,
-            ...args
-        };
-        return this.#request("sendMediaGroup", options);
-    };
-
-    // sendLocation
-    sendLocation({ chat_id, latitude, longitude, live_period = "", reply_markup = "", ...args }) {
-        const options = {
-            chat_id,
-            latitude,
-            longitude,
-            live_period,
-            reply_markup,
-            ...args
-        };
-        return this.#request("sendLocation", options);
-    };
-
-    // sendVenue
-    sendVenue({ chat_id, latitude, longitude, title, address, reply_markup = "", ...args }) {
-        const options = {
-            chat_id,
-            latitude,
-            longitude,
-            title,
-            address,
-            reply_markup,
-            ...args
-        };
-        return this.#request("sendVenue", options);
-    };
-
-    // sendContact
-    sendContact({ chat_id, phone_number, first_name, last_name = "", vcard = "", reply_markup = "", ...args }) {
-        const options = {
-            chat_id,
-            phone_number,
-            first_name,
-            last_name,
-            vcard,
-            reply_markup,
-            ...args
-        };
-        return this.#request("sendContact", options);
-    };
-
-    // sendPoll
-    sendPoll({ chat_id, question, options, is_anonymous = true, type = "regular", allows_multiple_answers = false, correct_option_id = null, explanation = "", reply_markup = "", ...args }) {
-        const optionsBody = {
-            chat_id,
-            question,
-            options,
-            is_anonymous,
-            type,
-            allows_multiple_answers,
-            correct_option_id,
-            explanation,
-            reply_markup,
-            ...args
-        };
-        return this.#request("sendPoll", optionsBody);
-    };
-
-    // sendDice
-    sendDice({ chat_id, emoji = "", reply_markup = "", ...args }) {
-        const options = {
-            chat_id,
-            emoji,
-            reply_markup,
-            ...args
-        };
-        return this.#request("sendDice", options);
-    };
-
-    // sendChatAction
-    sendChatAction({ chat_id, action, ...args }) {
-        const options = {
-            chat_id,
-            action,
-            ...args
-        };
-        return this.#request("sendChatAction", options);
-    };
-
-    // setMessageReaction
-    setMessageReaction({ chat_id, message_id, reaction = "", is_big = false, ...args }) {
-        const options = {
-            chat_id,
-            message_id,
-            reaction,
-            is_big,
-            ...args
-        };
-        return this.#request("setMessageReaction", options);
-    };
-
-    // getUserProfilePhotos
-    getUserProfilePhotos({ user_id, offset = 0, limit = 100, ...args }) {
-        const options = {
-            user_id,
-            offset,
-            limit,
-            ...args
-        };
-        return this.#request("getUserProfilePhotos", options);
-    };
-
-    // getFile
-    getFile({ file_id }) {
-        const options = {
-            file_id,
-        };
-        return this.#request("getFile", options);
-    };
-
-    // Get Download File Link
-    getDownloadLink({ file_id }) {
-        return this.getFile({ file_id }).then(function (response) {
-            return `${this.options.baseApiUrl}/file/bot${this.botToken}/${response.file_path}`
-        }.bind(this)).catch(error => {
-            return { error: error.message }
-        });
-    };
-
-    // banChatMember
-    banChatMember({ chat_id, user_id, until_date = "", revoke_messages = false }) {
-        const options = {
-            chat_id,
-            user_id,
-            until_date,
-            revoke_messages
-        };
-        return this.#request("banChatMember", options);
-    };
-
-    // unbanChatMember
-    unbanChatMember({ chat_id, user_id, only_if_banned }) {
-        const options = {
-            chat_id,
-            user_id,
-            only_if_banned
-        };
-        return this.#request("unbanChatMember", options);
-    };
-
-    // restrictChatMember
-    restrictChatMember({ chat_id, user_id, permissions, until_date = "", ...args }) {
-        const options = {
-            chat_id,
-            user_id,
-            permissions,
-            until_date,
-            ...args
-        };
-        return this.#request("restrictChatMember", options);
-    };
-
-    // promoteChatMember
-    promoteChatMember({ chat_id, user_id, is_anonymous = false, can_manage_chat = false, can_post_messages = false, can_edit_messages = false, can_delete_messages = false, can_manage_video_chats = false, can_restrict_members = false, can_promote_members = false, ...args }) {
-        const options = {
-            chat_id,
-            user_id,
-            is_anonymous,
-            can_manage_chat,
-            can_post_messages,
-            can_edit_messages,
-            can_delete_messages,
-            can_manage_video_chats,
-            can_restrict_members,
-            can_promote_members,
-            ...args
-        };
-        return this.#request("promoteChatMember", options);
-    };
-
-    // setChatAdministratorCustomTitle
-    setChatAdministratorCustomTitle({ chat_id, user_id, custom_title }) {
-        const options = {
-            chat_id,
-            user_id,
-            custom_title,
-        };
-        return this.#request("setChatAdministratorCustomTitle", options);
-    };
-
-    // banChatSenderChat
-    banChatSenderChat({ chat_id, sender_chat_id }) {
-        const options = {
-            chat_id,
-            sender_chat_id
-        };
-        return this.#request("banChatSenderChat", options);
-    };
-
-    // unbanChatSenderChat
-    unbanChatSenderChat({ chat_id, sender_chat_id }) {
-        const options = {
-            chat_id,
-            sender_chat_id
-        };
-        return this.#request("unbanChatSenderChat", options);
-    };
-
-
-    // setChatPermissions
-    setChatPermissions({ chat_id, permissions, ...args }) {
-        const options = {
-            chat_id,
-            permissions,
-            ...args
-        };
-        return this.#request("setChatPermissions", options);
-    }
-
-    // exportChatInviteLink
-    exportChatInviteLink({ chat_id }) {
-        const options = {
-            chat_id
-        };
-        return this.#request("exportChatInviteLink", options);
-    }
-
-    // createChatInviteLink
-    createChatInviteLink({ chat_id, name = "", expire_date = 0, member_limit = 0, creates_join_request = false }) {
-        const options = {
-            chat_id,
-            name,
-            expire_date,
-            member_limit,
-            creates_join_request,
-        };
-        return this.#request("createChatInviteLink", options);
-    }
-
-    // editChatInviteLink
-    editChatInviteLink({ chat_id, invite_link, name = "", expire_date = 0, member_limit = 0, creates_join_request = false }) {
-        const options = {
-            chat_id,
-            invite_link,
-            name,
-            expire_date,
-            member_limit,
-            creates_join_request
-        };
-        return this.#request("editChatInviteLink", options);
-    }
-
-    // revokeChatInviteLink
-    revokeChatInviteLink({ chat_id, invite_link }) {
-        const options = {
-            chat_id,
-            invite_link
-        };
-        return this.#request("revokeChatInviteLink", options);
-    }
-
-    // approveChatJoinRequest
-    approveChatJoinRequest({ chat_id, user_id }) {
-        const options = {
-            chat_id,
-            user_id,
-        };
-        return this.#request("approveChatJoinRequest", options);
-    }
-
-    // declineChatJoinRequest
-    declineChatJoinRequest({ chat_id, user_id }) {
-        const options = {
-            chat_id,
-            user_id,
-        };
-        return this.#request("declineChatJoinRequest", options);
-    }
-
-    // setChatPhoto
-    setChatPhoto({ chat_id, photo }) {
-        const options = {
-            chat_id,
-            photo
-        };
-        return this.#request("setChatPhoto", options);
-    }
-
-    // deleteChatPhoto
-    deleteChatPhoto({ chat_id }) {
-        const options = {
-            chat_id
-        };
-        return this.#request("deleteChatPhoto", options);
-    }
-
-    // setChatTitle
-    setChatTitle({ chat_id, title }) {
-        const options = {
-            chat_id,
-            title
-        };
-        return this.#request("setChatTitle", options);
-    }
-
-    // setChatDescription
-    setChatDescription({ chat_id, description = "" }) {
-        const options = {
-            chat_id,
-            description
-        };
-        return this.#request("setChatDescription", options);
-    }
-
-    // pinChatMessage
-    pinChatMessage({ chat_id, message_id, disable_notification = false, ...args }) {
-        const options = {
-            chat_id,
-            message_id,
-            disable_notification,
-            ...args
-        };
-        return this.#request("pinChatMessage", options);
-    }
-
-    // unpinChatMessage
-    unpinChatMessage({ chat_id, message_id, ...args }) {
-        const options = {
-            chat_id,
-            message_id,
-            ...args
-        };
-        return this.#request("unpinChatMessage", options);
-    }
-
-    // unpinAllChatMessages
-    unpinAllChatMessages({ chat_id }) {
-        const options = {
-            chat_id
-        };
-        return this.#request("unpinAllChatMessages", options);
-    }
-
-    // leaveChat
-    leaveChat({ chat_id }) {
-        const options = {
-            chat_id
-        };
-        return this.#request("leaveChat", options);
-    }
-
-    // getChat
-    getChat({ chat_id }) {
-        const options = {
-            chat_id,
-        };
-        return this.#request("getChat", options);
-    }
-
-    // getChatAdministrators
-    getChatAdministrators({ chat_id }) {
-        const options = {
-            chat_id,
-        };
-        return this.#request("getChatAdministrators", options);
-    }
-
-    // getChatMemberCount
-    getChatMemberCount({ chat_id }) {
-        const options = {
-            chat_id,
-        };
-        return this.#request("getChatMemberCount", options);
-    }
-
-    // getChatMember
-    getChatMember({ chat_id, user_id }) {
-        const options = {
-            chat_id,
-            user_id,
-        };
-        return this.#request("getChatMember", options);
-    }
-
-    // setChatStickerSet
-    setChatStickerSet({ chat_id, sticker_set_name }) {
-        const options = {
-            chat_id,
-            sticker_set_name,
-        };
-        return this.#request("setChatStickerSet", options);
-    }
-
-    // deleteChatStickerSet
-    deleteChatStickerSet({ chat_id }) {
-        const options = {
-            chat_id,
-        };
-        return this.#request("deleteChatStickerSet", options);
-    }
-
-    // answerCallbackQuery
-    answerCallbackQuery({ callback_query_id, text = "", show_alert = false, url = "", cache_time = 0 }) {
-        const options = {
-            callback_query_id,
-            text,
-            show_alert,
-            url,
-            cache_time,
-        };
-        return this.#request("answerCallbackQuery", options);
-    };
-
-    // editMessageText
-    editMessageText({ chat_id, message_id, text, reply_markup = "", ...argsF }) {
-        const options = {
-            chat_id,
-            message_id,
-            text,
-            reply_markup,
-            ...args
-        }
-        return this.#request('editMessageText', options);
-    };
-
-    // editMessageCaption
-    editMessageCaption({ chat_id, message_id, caption, reply_markup = "", ...args }) {
-        const options = {
-            chat_id,
-            message_id,
-            caption,
-            reply_markup,
-            ...args
-        }
-        return this.#request('editMessageCaption', options);
-    };
-
-    // editMessageMedia
-    editMessageMedia({ chat_id, message_id, media, reply_markup = "", ...args }) {
-        const options = {
-            chat_id,
-            message_id,
-            media,
-            reply_markup,
-            ...args
-        }
-        return this.#request('editMessageMedia', options);
-    };
-
-    // editMessageLiveLocation
-    editMessageLiveLocation({ chat_id, message_id, latitude, longitude, live_period, reply_markup = "", ...args }) {
-        const options = {
-            chat_id,
-            message_id,
-            latitude,
-            longitude,
-            live_period,
-            reply_markup,
-            ...args
-        }
-        return this.#request('editMessageLiveLocation', options);
-    };
-
-    // stopMessageLiveLocation
-    stopMessageLiveLocation({ chat_id, message_id, reply_markup = "", ...args }) {
-        const options = {
-            chat_id,
-            message_id,
-            reply_markup,
-            ...args
-        }
-        return this.#request('stopMessageLiveLocation', options);
-    };
-
-    // editMessageReplyMarkup
-    editMessageReplyMarkup({ chat_id, message_id, reply_markup = "", ...args }) {
-        const options = {
-            chat_id,
-            message_id,
-            reply_markup,
-            ...args
-        }
-        return this.#request('editMessageReplyMarkup', options);
-    };
-
-    // stopPoll
-    stopPoll({ chat_id, message_id, reply_markup = "", ...args }) {
-        const options = {
-            chat_id,
-            message_id,
-            reply_markup,
-            ...args
-        }
-        return this.#request('stopPoll', options);
-    };
-
-    // deleteMessage
-    deleteMessage({ chat_id, message_id }) {
-        const options = {
-            chat_id,
-            message_id
-        }
-        return this.#request('deleteMessage', options);
-    };
-
-    // deleteMessages
-    deleteMessages({ chat_id, message_ids }) {
-        const options = {
-            chat_id,
-            message_ids
-        };
-        return this.#request('deleteMessages', options);
-    };
-
-    // ===================================================================== //
-
-    #buildURL(path) {
-        const envPath = this.botConfig.testEnvironment ? '/test' : '';
-        return `${this.botConfig.baseApiUrl}/bot${this.botConfig.token}${envPath}/${path}`;
-    };
-
-    #preparePayload(options) {
-        if (!options) {
-            return { method: 'GET' };
-        };
-
-        const formData = new FormData();
-        Object.entries(options).forEach(([key, value]) => {
-            if (typeof value === 'object' && value?.source) {
-                if (Buffer.isBuffer(value.source)) {
-                    formData.append(key, value.source, { knownLength: value.source.length });
-                } else if (fs.existsSync(value.source)) {
-                    formData.append(key, fs.createReadStream(value.source), { knownLength: fs.statSync(value.source).size });
-                }
-            } else {
-                formData.append(key, value);
-            };
-        });
-
-        return { method: 'POST', body: formData };
-    };
-
-
-    #getUpdates({ offset, timeout, limit }) {
-        const path = `getUpdates?offset=${offset}&limit=${limit}&timeout=${timeout}`
-        return this.#request(path);
-    };
-
-    #request(path, options) {
-        const payload = this.#preparePayload(options);
-        const url = this.#buildURL(path);
-
-        return fetch(url, payload).then(res => res.json()).then(function (response) {
-            if (!response.ok) {
-                throw new Error(`Error Code : ${response.error_code} : ${response.description}`);
-            };
-            return response.result;
-        });
-    };
-
-    #handleUpdate(update) {
-        let offset = update.update_id + 1;
-
+    // ============================================== //
+
+    /**
+     * Handles incoming updates from Telegram.
+     * @param {Object} update - The update object received from Telegram.
+     */
+    handleUpdate(update) {
         const message = update.message;
         const callback_query = update.callback_query;
 
@@ -978,58 +313,6 @@ class NodeTeleBotAPI {
                 };
             });
         };
-
-        this.polling.offset = offset;
-    };
-
-    // ===================================================================== //
-
-    #handleLoop() {
-        if (!this.started) {
-            return;
-        };
-
-        const updateLoop = this.#handleLoop.bind(this);
-        const handleUpdate = this.#handleUpdate.bind(this);
-
-        this.#getUpdates({
-            offset: this.polling.offset,
-            limit: this.polling.limit,
-            timeout: this.polling.timeout
-        }).then(function (updates) {
-            updates.forEach(update => handleUpdate(update));
-            updateLoop();
-        }).catch(function (error) {
-            console.log(error);
-            updateLoop();
-        });
-    };
-
-    // ===================================================================== //
-
-    #startWebhook() {
-        let { port, hostname, cb: customCallback, ...webhook } = this.webhook
-
-        const domain = new URL(webhook.domain).host;
-        const hookpath = webhook.path || `/node-tele-bot-api/${crypto.randomBytes(32).toString('hex')}`;
-
-        this.#webhookServer(hookpath, port, hostname, customCallback);
-
-        this.setWebhook({
-            url: `https://${domain}${hookpath}`
-        }).then(() => console.log(`Bot started with webhook @ https://${domain}`))
-    };
-
-
-    #webhookServer(hookpath, port, hostname, customCallback) {
-        const webhookCb = webhookCallback(hookpath, (update) => this.#handleUpdate(update));
-        const callback = (customCallback && typeof customCallback === 'function') ? customCallback : webhookCb;
-
-        const server = require('http').createServer(callback);
-
-        server.listen(port, hostname, () => {
-            console.log('Webhook listening on port: %s', port)
-        });
     };
 };
 
