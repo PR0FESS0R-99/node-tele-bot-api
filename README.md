@@ -29,14 +29,14 @@ const BOT_TOKEN = "YOUR_BOT_TOKEN";
 const bot = new NodeTeleBotAPI(BOT_TOKEN);
 
 bot.onCommand("start", function (message) {
-    bot.sendMessage({
-        chat_id: message.chat.id,
-        text: `Hello! <b>I'm</b> a simple bot that responds to /start command with a greeting message.`
-    });
+  bot.telegram.sendMessage({
+    chat_id: message.chat.id,
+    text: `Hello! <b>I'm</b> a simple bot that responds to /start command with a greeting message.`,
+  });
 });
 
 bot.start(() => {
-    console.log("Bot Started");
+  console.log("Bot Started");
 });
 ```
 
