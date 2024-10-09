@@ -633,7 +633,7 @@ class TelegramMethod {
     };
 
     // editMessageText
-    editMessageText({ chat_id, message_id, text, reply_markup = "", ...argsF }) {
+    editMessageText({ chat_id, message_id, text, reply_markup = "", ...args }) {
         const options = {
             chat_id,
             message_id,

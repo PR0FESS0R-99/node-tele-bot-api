@@ -35,7 +35,7 @@ bot.onCommand("start", function (message) {
   });
 });
 
-bot.start(() => {
+bot.startBot(() => {
   console.log("Bot Started");
 });
 ```
