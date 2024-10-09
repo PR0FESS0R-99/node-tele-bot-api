@@ -10,7 +10,6 @@ bot.onCommand("start", function (message) {
     const chat_id = message.chat.id;
     const text = `Markup Bot...`;
 
-
     const reply_markup = Markup.createButton([[
         Markup.button({ text: "JOIN", url: "https://t.me/nodetelebotapi" }),
         Markup.button({ text: "CALLBACK", callback_data: "sampleCallback" }),
