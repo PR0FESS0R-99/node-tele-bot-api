@@ -1,7 +1,7 @@
 const { NodeTeleBotAPI } = require("node-tele-bot-api");
 const { Markup } = require("node-tele-bot-api/types");
 
-const BOT_TOKEN = '7070608927:AAEoSW0AkO2Icoc2Xwg7mfxSSkybuJdvwFc';
+const BOT_TOKEN = '<bot-token>';
 
 const bot = new NodeTeleBotAPI(BOT_TOKEN);
 
